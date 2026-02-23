@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rocket Pilot Center - 1000 Pts</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; }
+        #game-container { position: relative; width: 100vw; height: 100vh; }
+        video { 
+            transform: scaleX(-1); 
+            width: 100%; height: 100%; object-fit: cover; 
+            position: absolute; top: 0; left: 0;
+            opacity: 0.5; 
+        }
+        canvas { position: absolute; top: 0; left: 0; z-index: 5; }
+        #ui-layer {
+            position: absolute; top: 20px; width: 100%; text-align: center;
+            color: #00ff00; z-index: 10; pointer-events: none;
+            text-shadow: 2px 2px #000;
+        }
+        #overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); display: flex; justify-content: center;
+            align-items: center; z-index: 100; color: #00ff00; text-align: center;
+        }
+        .btn-start {
+            background: transparent; border: 2px solid #00ff00; padding: 15px 40px;
+            color: #00ff00; font-size: 20px; border-radius: 5px; cursor: pointer;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <video id="input_video"></video>
+        <canvas id="output_canvas"></canvas>
+        <div id="ui-layer">
+            <h1 style="margin:0;">ALTITUDE: <span id="scoreText">0</span> FT</h1>
+            <p>KONTROL: GERAKAN HIDUNG (KIRI/KANAN)</p>
+        </div>
+    </div>
+
+    <div id="overlay">
+        <div>
+            <h1>ROCKET CENTER CALIBRATION</h1>
+            <p id="status">Posisikan wajah di tengah layar</p>
+            <button class="btn-start" onclick="launchGame()">LUNCURKAN ROKET</button>
+        </div>
+    </div>
+
+<script>
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const ctx = canvasElement.getContext('2d');
+    const scoreText = document.getElementById('scoreText');
+    const overlay = document.getElementById('overlay');
+
+    let score = 0;
+    let gameActive = false;
+    let currentX = window.innerWidth / 2; // Default di tengah
+    let targetX = window.innerWidth / 2;
+    let meteors = [];
+    let speed = 8;
+
+    function resize() {
+        canvasElement.width = window.innerWidth;
+        canvasElement.height = window.innerHeight;
+        targetX = canvasElement.width / 2;
+        currentX = canvasElement.width / 2;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
+
+    faceMesh.onResults((results) => {
+        if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+            const nose = results.multiFaceLandmarks[0][1]; 
+            // Perbaikan Logika: nose.x (0 kiri, 1 kanan). Karena video dimirror, nose.x 0.1 berarti di kanan layar.
+            // Kita balik agar natural: (1 - nose.x)
+            targetX = (1 - nose.x) * canvasElement.width;
+        }
+    });
+
+    const camera = new Camera(videoElement, {
+        onFrame: async () => { await faceMesh.send({image: videoElement}); },
+        width: 1280, height: 720
+    });
+
+    function launchGame() {
+        camera.start().then(() => {
+            overlay.style.display = 'none';
+            gameActive = true;
+            gameLoop();
+        });
+    }
+
+    function spawnMeteor() {
+        if (Math.random() < 0.06) {
+            meteors.push({
+                x: Math.random() * canvasElement.width,
+                y: -50,
+                size: 50,
+                passed: false
+            });
+        }
+    }
+
+    function gameLoop() {
+        if (!gameActive) return;
+        ctx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+        // Smoothing gerakan roket (Lerp)
+        currentX += (targetX - currentX) * 0.2;
+
+        // Gambar Roket
+        const rY = canvasElement.height - 150;
+        drawRocket(currentX, rY);
+
+        // Logika Meteor
+        spawnMeteor();
+        for (let i = meteors.length - 1; i >= 0; i--) {
+            let m = meteors[i];
+            m.y += speed;
+
+            // Gambar Meteor (Lingkaran coklat)
+            ctx.fillStyle = "#8b4513";
+            ctx.beginPath();
+            ctx.arc(m.x, m.y, m.size/2, 0, Math.PI*2);
+            ctx.fill();
+
+            // Cek Tabrakan
+            let dist = Math.hypot(m.x - currentX, m.y - rY);
+            if (dist < m.size/2 + 30) {
+                gameOver();
+            }
+
+            // Skor
+            if (m.y > rY && !m.passed) {
+                m.passed = true;
+                score += 5;
+                scoreText.innerText = score;
+                if(score >= 1000) win();
+            }
+            if (m.y > canvasElement.height) meteors.splice(i, 1);
+        }
+        requestAnimationFrame(gameLoop);
+    }
+
+    function drawRocket(x, y) {
+        ctx.save();
+        ctx.translate(x, y);
+        // Badan
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(-15, 0, 30, 60);
+        // Kepala
+        ctx.beginPath();
+        ctx.moveTo(-15, 0); ctx.lineTo(0, -30); ctx.lineTo(15, 0);
+        ctx.fillStyle = "red"; ctx.fill();
+        // Api
+        ctx.fillStyle = "orange";
+        ctx.fillRect(-10, 60, 20, 15 + Math.random()*10);
+        ctx.restore();
+    }
+
+    function gameOver() {
+        gameActive = false;
+        alert("ROKET HANCUR! Skormu: " + score);
+        location.reload();
+    }
+
+    function win() {
+        gameActive = false;
+        alert("MISI BERHASIL! 1000 FT TERCAPAI!");
+        location.reload();
+    }
+</script>
+</body>
+</html>
